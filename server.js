@@ -1,0 +1,130 @@
+const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { createProxyMiddleware } = require('http-proxy-middleware');
+
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+// Railway está delante como reverse proxy. Sin esto, req.ip (usado por el
+// rate limiter y por cualquier log de IP) ve la IP interna de Railway en
+// vez de la IP real del cliente.
+app.set('trust proxy', 1);
+
+// Headers de seguridad estándar (CSP, X-Frame-Options, X-Content-Type-Options, etc.)
+app.use(helmet());
+
+// Mismo handler para todos los limiters: 429 con JSON parejo.
+function makeLimiter(max) {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+      res.status(429).json({ error: 'too many requests' });
+    },
+  });
+}
+
+// General: catch-all (TARGET_APP_URL) y moduleRoutes. Más permisivo porque
+// incluye los assets estáticos que la SPA pide en cada visita.
+const generalLimiter = makeLimiter(1000);
+
+// /admin: superficie más sensible (panel de superadmin), límite propio más
+// bajo que el general pero holgado para el uso normal del panel.
+const adminLimiter = makeLimiter(200);
+
+// Targets de los servicios internos de OFEK (Railway private networking).
+const TARGET_APP_URL = process.env.TARGET_APP_URL || 'http://ofek-app-frontend.railway.internal:8080';
+const TARGET_ADMIN_URL = process.env.TARGET_ADMIN_URL || 'http://ofek-admin-frontend.railway.internal:8080';
+const TARGET_API_URL = process.env.TARGET_API_URL || 'http://ofek-app-core.railway.internal:8080';
+
+const PROXY_TIMEOUT_MS = 30000;
+
+function makeProxy(target) {
+  return createProxyMiddleware({
+    target,
+    changeOrigin: true,
+    // Si el servicio interno no responde en este tiempo, cortar la
+    // conexión en vez de dejarla colgada indefinidamente.
+    proxyTimeout: PROXY_TIMEOUT_MS,
+    timeout: PROXY_TIMEOUT_MS,
+    on: {
+      // Loguear SOLO método, path y destino. Nunca loguear el header
+      // Authorization (ni ningún otro header) ni el body del request.
+      proxyReq: (proxyReq, req) => {
+        console.log(`[gateway] ${req.method} ${req.originalUrl} -> ${target}`);
+      },
+      // El servicio interno está caído, no respondió a tiempo, o tiró un
+      // error de conexión: no exponer el stack trace / mensaje crudo de
+      // Node al cliente, responder un JSON genérico.
+      error: (err, req, res) => {
+        console.error(`[gateway] error proxeando ${req.method} ${req.originalUrl} -> ${target}: ${err.code || err.message}`);
+        if (res.headersSent || res.writableEnded) {
+          return res.end();
+        }
+        res.status(502).json({ error: 'servicio no disponible' });
+      },
+    },
+  });
+}
+
+// NOTA: todo el montaje se hace con app.use(fn) SIN un path como primer
+// argumento. Si se usara app.use('/admin', proxy), Express le saca el
+// prefijo "/admin" a req.url antes de pasarlo al middleware, y el proxy
+// terminaría reenviando el path recortado al target. Montando todo en la
+// raíz y decidiendo la ruta "a mano" con req.path, req.url llega intacto
+// (== req.originalUrl) hasta el proxy, así el target recibe el path completo.
+
+// Config de proxies "directos": prefijo de path -> target. Para sumar un
+// servicio nuevo alcanza con agregar una entrada acá. Si no se indica
+// `limiter`, usa el general.
+const proxyRoutes = [
+  { prefix: '/admin', proxy: makeProxy(TARGET_ADMIN_URL), limiter: adminLimiter },
+];
+
+// Módulos de OFEK (ej: ofek-modulo-cobranza). Todavía no existen, así que
+// cualquier módulo no listado acá responde 503. Cuando un módulo se
+// despliegue, alcanza con agregar su entrada a este objeto.
+const moduleRoutes = {
+  // cobranza: makeProxy(process.env.TARGET_MODULO_COBRANZA_URL),
+};
+
+const appProxy = makeProxy(TARGET_APP_URL);
+
+function matchesPrefix(path, prefix) {
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
+app.use((req, res, next) => {
+  const route = proxyRoutes.find((r) => matchesPrefix(req.path, r.prefix));
+  if (route) {
+    return (route.limiter || generalLimiter)(req, res, () => route.proxy(req, res, next));
+  }
+
+  if (matchesPrefix(req.path, '/modulos')) {
+    return generalLimiter(req, res, () => {
+      const moduleName = req.path.split('/')[2];
+      const moduleProxy = moduleRoutes[moduleName];
+
+      if (moduleProxy) {
+        return moduleProxy(req, res, next);
+      }
+
+      console.log(`[gateway] ${req.method} ${req.originalUrl} -> 503 (modulo no disponible aun)`);
+      return res.status(503).json({ status: 'modulo no disponible aun' });
+    });
+  }
+
+  // Catch-all: cualquier otro path (SPA de la app cliente, assets, etc.)
+  return generalLimiter(req, res, () => appProxy(req, res, next));
+});
+
+app.listen(PORT, () => {
+  console.log(`[gateway] ofek-gateway escuchando en puerto ${PORT}`);
+  console.log(`[gateway] /admin/*    -> ${TARGET_ADMIN_URL}`);
+  console.log(`[gateway] /modulos/*  -> 503 (sin proxies configurados aun)`);
+  console.log(`[gateway] /*          -> ${TARGET_APP_URL}`);
+  console.log(`[gateway] TARGET_API_URL definido pero sin ruta asignada: ${TARGET_API_URL}`);
+});

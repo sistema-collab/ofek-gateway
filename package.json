@@ -1,0 +1,16 @@
+{
+  "name": "ofek-gateway",
+  "version": "1.0.0",
+  "description": "Gateway central de OFEK: enruta por path a los servicios internos via Railway private networking",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
+    "http-proxy-middleware": "^3.0.3"
+  }
+}
