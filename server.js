@@ -122,8 +122,17 @@ app.get('/modulos/test', (req, res) => {
 <p class="warn">Ruta temporal de testing. No usar en producción.</p>
 <h1>Test de sesión Supabase (/modulos/test)</h1>
 <div id="resultado">Buscando sesión...</div>
-<script>
-(function () {
+<script src="/modulos/test.js"></script>
+</body>
+</html>`);
+});
+
+// Mismo bloque temporal: el JS de /modulos/test va aparte porque el CSP de
+// Helmet (script-src 'self', sin unsafe-inline) bloquea <script> inline. Se
+// sirve como archivo separado, con Content-Type application/javascript, para
+// cumplir la política existente sin relajarla.
+app.get('/modulos/test.js', (req, res) => {
+  res.type('application/javascript').send(`(function () {
   function base64UrlDecode(str) {
     str = str.replace(/-/g, '+').replace(/_/g, '/');
     while (str.length % 4) str += '=';
@@ -171,9 +180,7 @@ app.get('/modulos/test', (req, res) => {
     resultado.innerHTML = '<p><strong>Error parseando el token:</strong> ' + e.message + '</p>';
   }
 })();
-</script>
-</body>
-</html>`);
+`);
 });
 // ============================================================================
 // FIN RUTA TEMPORAL
