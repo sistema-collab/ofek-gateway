@@ -82,6 +82,13 @@ function makeProxy(target) {
 // `limiter`, usa el general.
 const proxyRoutes = [
   { prefix: '/admin', proxy: makeProxy(TARGET_ADMIN_URL), limiter: adminLimiter },
+  // /auth y /api las consumen tanto el panel admin como el cliente logueado
+  // (ej. /api/notificaciones), no son superficie exclusiva del panel -- van
+  // con generalLimiter, igual que el catch-all. La fuerza bruta sobre login
+  // puntualmente ya la frena el loginLimiter propio del backend
+  // (ofek-app-core), esta es una capa extra, no la única.
+  { prefix: '/auth', proxy: makeProxy(TARGET_API_URL), limiter: generalLimiter },
+  { prefix: '/api', proxy: makeProxy(TARGET_API_URL), limiter: generalLimiter },
 ];
 
 // Módulos de OFEK (ej: ofek-modulo-cobranza). Todavía no existen, así que
@@ -124,7 +131,8 @@ app.use((req, res, next) => {
 app.listen(PORT, () => {
   console.log(`[gateway] ofek-gateway escuchando en puerto ${PORT}`);
   console.log(`[gateway] /admin/*    -> ${TARGET_ADMIN_URL}`);
+  console.log(`[gateway] /auth/*     -> ${TARGET_API_URL}`);
+  console.log(`[gateway] /api/*      -> ${TARGET_API_URL}`);
   console.log(`[gateway] /modulos/*  -> 503 (sin proxies configurados aun)`);
   console.log(`[gateway] /*          -> ${TARGET_APP_URL}`);
-  console.log(`[gateway] TARGET_API_URL definido pero sin ruta asignada: ${TARGET_API_URL}`);
 });
