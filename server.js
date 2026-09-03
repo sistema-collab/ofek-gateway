@@ -98,6 +98,87 @@ const moduleRoutes = {
   // cobranza: makeProxy(process.env.TARGET_MODULO_COBRANZA_URL),
 };
 
+// ============================================================================
+// TEMPORAL — SOLO PARA TESTING. ELIMINAR ESTA RUTA UNA VEZ VALIDADO QUE LA
+// SESIÓN DE SUPABASE SE COMPARTE CORRECTAMENTE ENTRE LA APP PRINCIPAL Y LOS
+// MÓDULOS BAJO /modulos/*. No es un caso real de moduleRoutes: es un caso
+// especial exclusivo de /modulos/test, resuelto ANTES del middleware de
+// proxies/módulos, así nunca cae en el 503 genérico de abajo.
+// ============================================================================
+app.get('/modulos/test', (req, res) => {
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Test sesión Supabase (TEMPORAL)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.25rem; }
+  .warn { background: #fff3cd; border: 1px solid #ffe69c; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem; }
+  ul { line-height: 1.6; }
+</style>
+</head>
+<body>
+<p class="warn">Ruta temporal de testing. No usar en producción.</p>
+<h1>Test de sesión Supabase (/modulos/test)</h1>
+<div id="resultado">Buscando sesión...</div>
+<script>
+(function () {
+  function base64UrlDecode(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    return decodeURIComponent(atob(str).split('').map(function (c) {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+  }
+
+  var resultado = document.getElementById('resultado');
+  var tokenKey = null;
+  var tokenValue = null;
+
+  for (var i = 0; i < localStorage.length; i++) {
+    var key = localStorage.key(i);
+    if (/^sb-.*-auth-token$/.test(key)) {
+      tokenKey = key;
+      tokenValue = localStorage.getItem(key);
+      break;
+    }
+  }
+
+  if (!tokenKey) {
+    resultado.innerHTML = '<p><strong>No se encontró sesión.</strong></p>';
+    return;
+  }
+
+  try {
+    var parsed = JSON.parse(tokenValue);
+    var accessToken = parsed.access_token;
+    if (!accessToken) {
+      resultado.innerHTML = '<p><strong>Se encontró la clave "' + tokenKey + '" pero no tiene access_token.</strong></p>';
+      return;
+    }
+
+    var payload = JSON.parse(base64UrlDecode(accessToken.split('.')[1]));
+    var expDate = payload.exp ? new Date(payload.exp * 1000).toLocaleString() : 'N/A';
+
+    resultado.innerHTML =
+      '<p><strong>Token encontrado</strong> (clave: ' + tokenKey + ')</p>' +
+      '<ul>' +
+      '<li><strong>sub (user id):</strong> ' + (payload.sub || 'N/A') + '</li>' +
+      '<li><strong>exp:</strong> ' + expDate + '</li>' +
+      '</ul>';
+  } catch (e) {
+    resultado.innerHTML = '<p><strong>Error parseando el token:</strong> ' + e.message + '</p>';
+  }
+})();
+</script>
+</body>
+</html>`);
+});
+// ============================================================================
+// FIN RUTA TEMPORAL
+// ============================================================================
+
 const appProxy = makeProxy(TARGET_APP_URL);
 
 function matchesPrefix(path, prefix) {
