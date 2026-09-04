@@ -12,7 +12,20 @@ const PORT = process.env.PORT || 8080;
 app.set('trust proxy', 1);
 
 // Headers de seguridad estándar (CSP, X-Frame-Options, X-Content-Type-Options, etc.)
-app.use(helmet());
+// Se parte de los directives por defecto de Helmet y se pisa SOLO img-src,
+// para permitir las fotos de perfil que el panel admin carga desde Supabase
+// Storage (bucket de producción). El resto de las directivas (script-src,
+// style-src, connect-src -> default-src, etc.) quedan igual que el default.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        'img-src': ["'self'", 'data:', 'https://fuhtdaxaebzswkntkakx.supabase.co'],
+      },
+    },
+  })
+);
 
 // Mismo handler para todos los limiters: 429 con JSON parejo.
 function makeLimiter(max) {
