@@ -155,31 +155,15 @@ app.get('/modulos/test.js', (req, res) => {
   }
 
   var resultado = document.getElementById('resultado');
-  var tokenKey = null;
-  var tokenValue = null;
+  var tokenKey = 'ofek_access_token';
+  var accessToken = localStorage.getItem(tokenKey);
 
-  for (var i = 0; i < localStorage.length; i++) {
-    var key = localStorage.key(i);
-    if (/^sb-.*-auth-token$/.test(key)) {
-      tokenKey = key;
-      tokenValue = localStorage.getItem(key);
-      break;
-    }
-  }
-
-  if (!tokenKey) {
+  if (!accessToken) {
     resultado.innerHTML = '<p><strong>No se encontró sesión.</strong></p>';
     return;
   }
 
   try {
-    var parsed = JSON.parse(tokenValue);
-    var accessToken = parsed.access_token;
-    if (!accessToken) {
-      resultado.innerHTML = '<p><strong>Se encontró la clave "' + tokenKey + '" pero no tiene access_token.</strong></p>';
-      return;
-    }
-
     var payload = JSON.parse(base64UrlDecode(accessToken.split('.')[1]));
     var expDate = payload.exp ? new Date(payload.exp * 1000).toLocaleString() : 'N/A';
 
