@@ -22,6 +22,7 @@ app.use(
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
         'img-src': ["'self'", 'data:', 'https://fuhtdaxaebzswkntkakx.supabase.co'],
+        'media-src': ["'self'", 'https://fuhtdaxaebzswkntkakx.supabase.co'],
       },
     },
   })
