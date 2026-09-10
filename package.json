@@ -5,7 +5,8 @@
   "private": true,
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check-routes": "node scripts/check-route-order.js"
   },
   "dependencies": {
     "express": "^4.19.2",

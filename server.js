@@ -2,6 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const { matchesPrefix, checkRouteOrder } = require('./lib/routeOrder');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -105,34 +106,67 @@ const proxyRoutes = [
   { prefix: '/api', proxy: makeProxy(TARGET_API_URL), limiter: generalLimiter },
 ];
 
-// Módulos de OFEK (ej: ofek-modulo-cobranza). Todavía no existen, así que
-// cualquier módulo no listado acá responde 503. Cuando un módulo se
-// despliegue, alcanza con agregar su entrada a este objeto.
-const moduleRoutes = {
-  // cobranza: makeProxy(process.env.TARGET_MODULO_COBRANZA_URL),
-};
+// Módulos de OFEK (ej: ofek-modulo-cobranza). Para sumar un módulo nuevo
+// alcanza con agregar su entrada acá con el nombre de la env var que va a
+// tener su target -- el proxy real se arma en buildModuleProxies.
+const moduleRoutesConfig = [
+  // { prefix: '/modulos/cobranza', targetEnvVar: 'TARGET_MODULO_COBRANZA_URL' },
+];
+
+// Arma el proxy de cada módulo en un loop, con un try/catch POR ITERACIÓN
+// (no uno solo alrededor de todo el loop): si a un módulo le falta la env
+// var del target, o makeProxy() falla por lo que sea, esa entrada puntual
+// queda con proxy: null y su ruta responde 503 más abajo -- un módulo mal
+// configurado no puede tirar abajo el proceso entero.
+function buildModuleProxies(routesConfig) {
+  return routesConfig.map((route) => {
+    try {
+      const target = process.env[route.targetEnvVar];
+      if (!target) {
+        throw new Error(`falta configurar la variable de entorno ${route.targetEnvVar}`);
+      }
+      return { prefix: route.prefix, proxy: makeProxy(target) };
+    } catch (err) {
+      console.error(`[gateway] modulo ${route.prefix} no disponible: ${err.message}`);
+      return { prefix: route.prefix, proxy: null };
+    }
+  });
+}
+
+const moduleRoutes = buildModuleProxies(moduleRoutesConfig);
+
+// Orden real en que se evalúan los prefijos en el dispatch de abajo
+// (proxyRoutes primero, después los módulos específicos, y por último el
+// fallback genérico "/modulos" para cualquier módulo no listado). Si esto
+// falla, el arranque se aborta -- ver lib/routeOrder.js.
+const routePrefixesInOrder = [
+  ...proxyRoutes.map((r) => r.prefix),
+  ...moduleRoutes.map((r) => r.prefix),
+  '/modulos',
+];
+checkRouteOrder(routePrefixesInOrder);
+
+const allRoutes = [...proxyRoutes, ...moduleRoutes];
 
 const appProxy = makeProxy(TARGET_APP_URL);
 
-function matchesPrefix(path, prefix) {
-  return path === prefix || path.startsWith(`${prefix}/`);
-}
-
 app.use((req, res, next) => {
-  const route = proxyRoutes.find((r) => matchesPrefix(req.path, r.prefix));
+  const route = allRoutes.find((r) => matchesPrefix(req.path, r.prefix));
   if (route) {
-    return (route.limiter || generalLimiter)(req, res, () => route.proxy(req, res, next));
+    const limiter = route.limiter || generalLimiter;
+
+    if (!route.proxy) {
+      return limiter(req, res, () => {
+        console.log(`[gateway] ${req.method} ${req.originalUrl} -> 503 (modulo no disponible aun)`);
+        res.status(503).json({ status: 'modulo no disponible aun' });
+      });
+    }
+
+    return limiter(req, res, () => route.proxy(req, res, next));
   }
 
   if (matchesPrefix(req.path, '/modulos')) {
     return generalLimiter(req, res, () => {
-      const moduleName = req.path.split('/')[2];
-      const moduleProxy = moduleRoutes[moduleName];
-
-      if (moduleProxy) {
-        return moduleProxy(req, res, next);
-      }
-
       console.log(`[gateway] ${req.method} ${req.originalUrl} -> 503 (modulo no disponible aun)`);
       return res.status(503).json({ status: 'modulo no disponible aun' });
     });
@@ -142,11 +176,22 @@ app.use((req, res, next) => {
   return generalLimiter(req, res, () => appProxy(req, res, next));
 });
 
-app.listen(PORT, () => {
-  console.log(`[gateway] ofek-gateway escuchando en puerto ${PORT}`);
-  console.log(`[gateway] /admin/*    -> ${TARGET_ADMIN_URL}`);
-  console.log(`[gateway] /auth/*     -> ${TARGET_API_URL}`);
-  console.log(`[gateway] /api/*      -> ${TARGET_API_URL}`);
-  console.log(`[gateway] /modulos/*  -> 503 (sin proxies configurados aun)`);
-  console.log(`[gateway] /*          -> ${TARGET_APP_URL}`);
-});
+// require.main !== module cuando este archivo se importa (ej. desde
+// scripts/check-route-order.js) en vez de correrse directo -- así el
+// chequeo de rutas de arriba se puede reusar sin levantar el server ni
+// pedir un puerto.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`[gateway] ofek-gateway escuchando en puerto ${PORT}`);
+    console.log(`[gateway] /admin/*    -> ${TARGET_ADMIN_URL}`);
+    console.log(`[gateway] /auth/*     -> ${TARGET_API_URL}`);
+    console.log(`[gateway] /api/*      -> ${TARGET_API_URL}`);
+    moduleRoutes.forEach((route) => {
+      console.log(`[gateway] ${route.prefix}/* -> ${route.proxy ? 'proxy configurado' : '503 (no disponible)'}`);
+    });
+    console.log(`[gateway] /modulos/*  -> 503 (cualquier otro modulo no listado arriba)`);
+    console.log(`[gateway] /*          -> ${TARGET_APP_URL}`);
+  });
+}
+
+module.exports = { routePrefixesInOrder };
