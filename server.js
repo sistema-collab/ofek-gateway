@@ -110,7 +110,7 @@ const proxyRoutes = [
 // alcanza con agregar su entrada acá con el nombre de la env var que va a
 // tener su target -- el proxy real se arma en buildModuleProxies.
 const moduleRoutesConfig = [
-  // { prefix: '/modulos/cobranza', targetEnvVar: 'TARGET_MODULO_COBRANZA_URL' },
+  { prefix: '/modulos/cobranza', targetEnvVar: 'TARGET_MODULO_COBRANZA_URL' },
 ];
 
 // Arma el proxy de cada módulo en un loop, con un try/catch POR ITERACIÓN
