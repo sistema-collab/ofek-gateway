@@ -3,6 +3,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { matchesPrefix, checkRouteOrder } = require('./lib/routeOrder');
+const { esRutaSinLimiter } = require('./lib/rateLimitExempt');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -50,6 +51,9 @@ const generalLimiter = makeLimiter(1000);
 // bajo que el general pero holgado para el uso normal del panel.
 const adminLimiter = makeLimiter(200);
 
+// Para las rutas de lib/rateLimitExempt.js.
+const sinLimiter = (req, res, next) => next();
+
 // Targets de los servicios internos de OFEK (Railway private networking).
 const TARGET_APP_URL = process.env.TARGET_APP_URL || 'http://ofek-app-frontend.railway.internal:8080';
 const TARGET_ADMIN_URL = process.env.TARGET_ADMIN_URL || 'http://ofek-admin-frontend.railway.internal:8080';
@@ -67,15 +71,17 @@ function makeProxy(target) {
     timeout: PROXY_TIMEOUT_MS,
     on: {
       // Loguear SOLO método, path y destino. Nunca loguear el header
-      // Authorization (ni ningún otro header) ni el body del request.
+      // Authorization (ni ningún otro header), el body del request ni el
+      // query string (req.path, no req.originalUrl): puede traer secretos,
+      // ej. el hub.verify_token de la verificación del webhook de Meta.
       proxyReq: (proxyReq, req) => {
-        console.log(`[gateway] ${req.method} ${req.originalUrl} -> ${target}`);
+        console.log(`[gateway] ${req.method} ${req.path} -> ${target}`);
       },
       // El servicio interno está caído, no respondió a tiempo, o tiró un
       // error de conexión: no exponer el stack trace / mensaje crudo de
       // Node al cliente, responder un JSON genérico.
       error: (err, req, res) => {
-        console.error(`[gateway] error proxeando ${req.method} ${req.originalUrl} -> ${target}: ${err.code || err.message}`);
+        console.error(`[gateway] error proxeando ${req.method} ${req.path} -> ${target}: ${err.code || err.message}`);
         if (res.headersSent || res.writableEnded) {
           return res.end();
         }
@@ -153,11 +159,14 @@ const appProxy = makeProxy(TARGET_APP_URL);
 app.use((req, res, next) => {
   const route = allRoutes.find((r) => matchesPrefix(req.path, r.prefix));
   if (route) {
-    const limiter = route.limiter || generalLimiter;
+    // Rutas exentas de rate limit (ver lib/rateLimitExempt.js): pasan
+    // directo. Igual que el resto, el gateway no parsea el body (llega
+    // crudo al target) ni exige sesión.
+    const limiter = esRutaSinLimiter(req.path) ? sinLimiter : route.limiter || generalLimiter;
 
     if (!route.proxy) {
       return limiter(req, res, () => {
-        console.log(`[gateway] ${req.method} ${req.originalUrl} -> 503 (modulo no disponible aun)`);
+        console.log(`[gateway] ${req.method} ${req.path} -> 503 (modulo no disponible aun)`);
         res.status(503).json({ status: 'modulo no disponible aun' });
       });
     }
@@ -167,7 +176,7 @@ app.use((req, res, next) => {
 
   if (matchesPrefix(req.path, '/modulos')) {
     return generalLimiter(req, res, () => {
-      console.log(`[gateway] ${req.method} ${req.originalUrl} -> 503 (modulo no disponible aun)`);
+      console.log(`[gateway] ${req.method} ${req.path} -> 503 (modulo no disponible aun)`);
       return res.status(503).json({ status: 'modulo no disponible aun' });
     });
   }
@@ -194,4 +203,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { routePrefixesInOrder };
+module.exports = { app, routePrefixesInOrder };
