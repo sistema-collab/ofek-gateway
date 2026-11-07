@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { matchesPrefix, checkRouteOrder } = require('./lib/routeOrder');
 const { esRutaSinLimiter } = require('./lib/rateLimitExempt');
+const { saneoIpActivo, sanearHeadersIp } = require('./lib/clientIpHeaders');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -61,6 +62,10 @@ const TARGET_API_URL = process.env.TARGET_API_URL || 'http://ofek-app-core.railw
 
 const PROXY_TIMEOUT_MS = 30000;
 
+// Saneo de headers de IP del cliente (ver lib/clientIpHeaders.js). Se lee
+// una sola vez al arrancar; apagado salvo GATEWAY_SANITIZE_IP_HEADERS=true.
+const SANEAR_IP = saneoIpActivo();
+
 function makeProxy(target) {
   return createProxyMiddleware({
     target,
@@ -75,6 +80,7 @@ function makeProxy(target) {
       // query string (req.path, no req.originalUrl): puede traer secretos,
       // ej. el hub.verify_token de la verificación del webhook de Meta.
       proxyReq: (proxyReq, req) => {
+        if (SANEAR_IP) sanearHeadersIp(proxyReq, req);
         console.log(`[gateway] ${req.method} ${req.path} -> ${target}`);
       },
       // El servicio interno está caído, no respondió a tiempo, o tiró un
@@ -200,6 +206,7 @@ if (require.main === module) {
     });
     console.log(`[gateway] /modulos/*  -> 503 (cualquier otro modulo no listado arriba)`);
     console.log(`[gateway] /*          -> ${TARGET_APP_URL}`);
+    console.log(`[gateway] saneo de headers de IP: ${SANEAR_IP ? 'activo' : 'inactivo'}`);
   });
 }
 
